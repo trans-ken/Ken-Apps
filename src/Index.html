@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Style'); ?>
+</head>
+<body>
+  <div id="app">
+
+    <!-- ===== ログイン ===== -->
+    <section id="view-login" class="view">
+      <div class="brand">
+        <h1>TRAN<span class="dot">PASS</span></h1>
+        <p>SECURE PASSWORD VAULT</p>
+      </div>
+      <div class="login-wrap">
+        <div id="login-msg" class="login-msg">PINを入力してください</div>
+        <div class="pin-dots" id="pin-dots">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="keypad" id="keypad"></div>
+        <div class="login-actions">
+          <button class="btn btn-ghost" id="pin-clear">やり直す</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 一覧 ===== -->
+    <section id="view-list" class="view hidden">
+      <div class="topbar">
+        <h2>TRANPASS</h2>
+        <button class="icon-btn" id="btn-settings" title="設定">⚙</button>
+        <button class="icon-btn" id="btn-lock" title="ロック">🔒</button>
+      </div>
+      <div class="search">
+        <input type="search" id="search" placeholder="🔍 名称・アカウントで検索">
+      </div>
+      <div class="chips" id="cat-chips"></div>
+      <div id="list"></div>
+      <button class="fab" id="btn-add" title="追加">＋</button>
+    </section>
+
+    <!-- ===== 追加/編集 ===== -->
+    <section id="view-edit" class="view hidden">
+      <div class="topbar">
+        <button class="icon-btn" id="edit-back">←</button>
+        <h2 id="edit-title">追加</h2>
+      </div>
+
+      <div class="type-toggle">
+        <button data-type="normal" class="active">通常 / アカウント</button>
+        <button data-type="creditcard">クレジットカード</button>
+      </div>
+
+      <div class="form-group">
+        <label>カテゴリー</label>
+        <select id="f-category"></select>
+      </div>
+      <div class="form-group">
+        <label>名称</label>
+        <input type="text" id="f-name" placeholder="例）○○銀行 / ○○カード">
+      </div>
+
+      <!-- 通常フィールド -->
+      <div id="fields-normal">
+        <div class="form-group">
+          <label>アカウント / ID</label>
+          <input type="text" id="f-account" placeholder="ログインID・メールなど">
+        </div>
+        <div class="form-group">
+          <label>パスワード</label>
+          <div class="pw-row">
+            <input type="text" id="f-password" placeholder="パスワード">
+            <button class="mini" id="f-gen" type="button">生成</button>
+          </div>
+        </div>
+
+        <div class="section-title">サブアカウント（取引パスワード等）</div>
+        <div id="sub-list"></div>
+        <button class="btn btn-ghost btn-block" id="add-sub" type="button">＋ サブアカウントを追加</button>
+      </div>
+
+      <!-- クレカフィールド -->
+      <div id="fields-card" class="hidden">
+        <div class="form-group">
+          <label>カード番号</label>
+          <input type="text" id="f-cardnum" inputmode="numeric" placeholder="0000 0000 0000 0000">
+        </div>
+        <div class="row">
+          <div class="form-group">
+            <label>有効期限 (MM/YY)</label>
+            <input type="text" id="f-expiry" placeholder="MM/YY">
+          </div>
+          <div class="form-group">
+            <label>セキュリティコード</label>
+            <input type="text" id="f-cardcode" inputmode="numeric" placeholder="CVV">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:14px;">
+        <label>メモ</label>
+        <textarea id="f-memo" placeholder="自由メモ"></textarea>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="save-entry" type="button" style="margin-bottom:10px;">保存</button>
+      <button class="btn btn-danger btn-block hidden" id="delete-entry" type="button">削除</button>
+    </section>
+
+    <!-- ===== 設定 ===== -->
+    <section id="view-settings" class="view hidden">
+      <div class="topbar">
+        <button class="icon-btn" id="settings-back">←</button>
+        <h2>設定</h2>
+      </div>
+
+      <div class="section-title">カテゴリー</div>
+      <div id="cat-edit-list"></div>
+      <div class="inline-input" style="margin-bottom:10px;">
+        <input type="text" id="new-cat" placeholder="新しいカテゴリー名">
+        <button class="btn btn-ghost" id="add-cat" type="button">追加</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="save-cats" type="button">カテゴリーを保存</button>
+
+      <div class="section-title" style="margin-top:24px;">PIN変更</div>
+      <div class="form-group">
+        <label>現在のPIN（1〜9を4桁）</label>
+        <input type="password" id="old-pin" inputmode="numeric" maxlength="4" placeholder="••••">
+      </div>
+      <div class="form-group">
+        <label>新しいPIN</label>
+        <input type="password" id="new-pin" inputmode="numeric" maxlength="4" placeholder="••••">
+      </div>
+      <button class="btn btn-ghost btn-block" id="change-pin" type="button">PINを変更</button>
+
+      <div class="section-title" style="margin-top:24px;">バックアップ</div>
+      <p style="color:var(--muted);font-size:13px;margin-top:0;">
+        暗号化されたVaultのコピーをDriveの「TRANPASS」フォルダに作成します。
+      </p>
+      <button class="btn btn-ghost btn-block" id="btn-backup" type="button">暗号化バックアップを作成</button>
+    </section>
+
+  </div>
+
+  <div id="toast"></div>
+  <?!= include('Script'); ?>
+</body>
+</html>

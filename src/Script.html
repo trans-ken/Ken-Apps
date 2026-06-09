@@ -332,7 +332,7 @@ function buildCard(e) {
   var foot = document.createElement('div');
   foot.className = 'card-foot';
   var edit = document.createElement('button');
-  edit.className = 'btn btn-ghost'; edit.textContent = '編集';
+  edit.className = 'edit-btn'; edit.textContent = '✎ 編集';
   edit.addEventListener('click', function() { openEdit(e); });
   foot.appendChild(edit);
   card.appendChild(foot);

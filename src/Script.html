@@ -87,7 +87,7 @@ function shuffle(arr) {
   return arr;
 }
 function renderKeypad() {
-  var digits = shuffle([1,2,3,4,5,6,7,8,9]);
+  var digits = shuffle([0,1,2,3,4,5,6,7,8,9]);
   var pad = $('keypad');
   pad.innerHTML = '';
   digits.forEach(function(d) {
@@ -174,7 +174,7 @@ function initLogin() {
     } else if (!st.pinSet) {
       App.mode = 'setup';
       App.setupStage = 1;
-      setLoginMsg('初回設定：4桁のPIN（1〜9）を決めてください');
+      setLoginMsg('初回設定：4桁のPIN（0〜9）を決めてください');
     } else {
       App.mode = 'verify';
       setLoginMsg('PINを入力してください');
@@ -557,7 +557,7 @@ function saveCats() {
 function changePin() {
   var oldP = $('old-pin').value.trim();
   var newP = $('new-pin').value.trim();
-  if (!/^[1-9]{4}$/.test(newP)) { toast('新しいPINは1〜9の数字4桁です', true); return; }
+  if (!/^[0-9]{4}$/.test(newP)) { toast('新しいPINは0〜9の数字4桁です', true); return; }
   call('apiChangePin', App.token, oldP, newP).then(function() {
     $('old-pin').value = ''; $('new-pin').value = '';
     toast('PINを変更しました');

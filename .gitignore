@@ -1,0 +1,11 @@
+# clasp（scriptId はローカル固有なので追跡しない）
+.clasp.json
+.clasprc.json
+
+# OS / editor
+.DS_Store
+node_modules/
+*.log
+
+# 配布用ビルド成果物
+*.zip

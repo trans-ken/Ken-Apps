@@ -1,0 +1,617 @@
+<script>
+// ============================================================
+//  TRANPASS クライアント
+// ============================================================
+var App = {
+  token: null,
+  vault: { categories: [], entries: [] },
+  // login
+  mode: 'verify',        // 'verify' | 'setup'
+  setupStage: 1,         // 1: 入力 / 2: 確認
+  setupFirst: null,
+  pinBuffer: [],
+  // edit
+  editType: 'normal',
+  editingId: null,
+  subAccounts: [],
+  // list
+  search: '',
+  filterCat: '__all__'
+};
+
+// ---------- google.script.run を Promise 化 ----------
+function call(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    var r = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function(err) { reject(err); });
+    r[fn].apply(r, args);
+  });
+}
+
+// ---------- ユーティリティ ----------
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+    return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+  });
+}
+var toastTimer;
+function toast(msg, isErr) {
+  var t = $('toast');
+  t.textContent = msg;
+  t.className = 'show' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { t.className = ''; }, 2200);
+}
+function showView(name) {
+  ['login', 'list', 'edit', 'settings'].forEach(function(v) {
+    $('view-' + v).classList.toggle('hidden', v !== name);
+  });
+  window.scrollTo(0, 0);
+}
+
+// ---------- クリップボード ----------
+function copyText(text, sensitive) {
+  function done() {
+    toast('コピーしました' + (sensitive ? '（60秒後に自動消去）' : ''));
+    if (sensitive) {
+      setTimeout(function() {
+        try { navigator.clipboard.writeText(''); } catch (e) {}
+      }, 60000);
+    }
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function() { fallbackCopy(text, done); });
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, cb) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand('copy'); cb(); } catch (e) { toast('コピーできませんでした', true); }
+  document.body.removeChild(ta);
+}
+
+// ============================================================
+//  ログイン画面
+// ============================================================
+function shuffle(arr) {
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+function renderKeypad() {
+  var digits = shuffle([0,1,2,3,4,5,6,7,8,9]);
+  var pad = $('keypad');
+  pad.innerHTML = '';
+  digits.forEach(function(d) {
+    var b = document.createElement('button');
+    b.className = 'key';
+    b.textContent = d;
+    b.addEventListener('click', function() { onDigit(d); });
+    pad.appendChild(b);
+  });
+}
+function updateDots() {
+  var dots = $('pin-dots').children;
+  for (var i = 0; i < dots.length; i++) {
+    dots[i].classList.toggle('on', i < App.pinBuffer.length);
+  }
+}
+function setLoginMsg(msg, isErr) {
+  var el = $('login-msg');
+  el.textContent = msg;
+  el.className = 'login-msg' + (isErr ? ' error' : '');
+}
+function resetPin() {
+  App.pinBuffer = [];
+  updateDots();
+  renderKeypad();
+}
+function onDigit(d) {
+  if (App.pinBuffer.length >= 4) return;
+  App.pinBuffer.push(d);
+  updateDots();
+  renderKeypad(); // 毎回シャッフルし直す
+  if (App.pinBuffer.length === 4) {
+    var pin = App.pinBuffer.join('');
+    setTimeout(function() { submitPin(pin); }, 150);
+  }
+}
+function submitPin(pin) {
+  if (App.mode === 'setup') return handleSetup(pin);
+  setLoginMsg('確認中...');
+  call('verifyPin', pin).then(function(res) {
+    App.token = res.token;
+    enterApp();
+  }).catch(function(err) {
+    setLoginMsg(err.message || 'ログインに失敗しました', true);
+    resetPin();
+  });
+}
+function handleSetup(pin) {
+  if (App.setupStage === 1) {
+    App.setupFirst = pin;
+    App.setupStage = 2;
+    resetPin();
+    setLoginMsg('確認のためもう一度入力してください');
+    return;
+  }
+  // stage 2
+  if (pin !== App.setupFirst) {
+    App.setupStage = 1;
+    App.setupFirst = null;
+    resetPin();
+    setLoginMsg('一致しませんでした。最初から設定してください', true);
+    return;
+  }
+  setLoginMsg('設定中...');
+  call('setupPin', pin).then(function(res) {
+    App.token = res.token;
+    toast('PINを設定しました');
+    enterApp();
+  }).catch(function(err) {
+    App.setupStage = 1; App.setupFirst = null;
+    setLoginMsg(err.message || '設定に失敗しました', true);
+    resetPin();
+  });
+}
+function initLogin() {
+  showView('login');
+  App.pinBuffer = [];
+  updateDots();
+  renderKeypad();
+  call('getLoginState').then(function(st) {
+    if (st.locked) {
+      App.mode = 'verify';
+      setLoginMsg('ロック中です。約' + st.lockRemaining + '秒後に再試行してください', true);
+    } else if (!st.pinSet) {
+      App.mode = 'setup';
+      App.setupStage = 1;
+      setLoginMsg('初回設定：4桁のPIN（0〜9）を決めてください');
+    } else {
+      App.mode = 'verify';
+      setLoginMsg('PINを入力してください');
+    }
+  }).catch(function(err) {
+    setLoginMsg(err.message || '接続に失敗しました', true);
+  });
+}
+function lockApp() {
+  App.token = null;
+  App.mode = 'verify';
+  initLogin();
+}
+
+// ============================================================
+//  アプリ本体（一覧）
+// ============================================================
+function enterApp() {
+  call('apiLoad', App.token).then(function(data) {
+    App.vault = data;
+    App.filterCat = '__all__';
+    App.search = '';
+    $('search').value = '';
+    renderChips();
+    renderList();
+    showView('list');
+  }).catch(function(err) { handleAuthErr(err); });
+}
+
+function handleAuthErr(err) {
+  toast(err.message || 'エラー', true);
+  if ((err.message || '').indexOf('セッション') >= 0) lockApp();
+}
+
+function renderChips() {
+  var box = $('cat-chips');
+  box.innerHTML = '';
+  var cats = ['__all__'].concat(App.vault.categories);
+  cats.forEach(function(c) {
+    var chip = document.createElement('div');
+    chip.className = 'chip' + (App.filterCat === c ? ' active' : '');
+    chip.textContent = c === '__all__' ? 'すべて' : c;
+    chip.addEventListener('click', function() {
+      App.filterCat = c;
+      renderChips();
+      renderList();
+    });
+    box.appendChild(chip);
+  });
+}
+
+function matchEntry(e, q) {
+  if (!q) return true;
+  q = q.toLowerCase();
+  var hay = [e.name, e.category, e.account, e.memo];
+  (e.subAccounts || []).forEach(function(s) { hay.push(s.label, s.account); });
+  return hay.some(function(x) { return x && String(x).toLowerCase().indexOf(q) >= 0; });
+}
+
+function renderList() {
+  var list = $('list');
+  list.innerHTML = '';
+  var items = App.vault.entries.filter(function(e) {
+    if (App.filterCat !== '__all__' && e.category !== App.filterCat) return false;
+    return matchEntry(e, App.search);
+  }).sort(function(a, b) { return (a.name || '').localeCompare(b.name || '', 'ja'); });
+
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">' +
+      (App.vault.entries.length ? '該当する項目がありません' : '右下の ＋ から登録しましょう') +
+      '</div>';
+    return;
+  }
+  items.forEach(function(e) { list.appendChild(buildCard(e)); });
+}
+
+// 値＋コピーボタンの1行を生成
+function fieldRow(label, value, opts) {
+  opts = opts || {};
+  var row = document.createElement('div');
+  row.className = 'field';
+
+  var lab = document.createElement('div');
+  lab.className = 'label'; lab.textContent = label;
+  row.appendChild(lab);
+
+  var val = document.createElement('div');
+  val.className = 'val' + (opts.mask ? ' masked' : '');
+  var shown = opts.mask ? '••••••••' : value;
+  val.textContent = shown;
+  row.appendChild(val);
+
+  if (opts.mask) {
+    var eye = document.createElement('button');
+    eye.className = 'mini'; eye.textContent = '👁';
+    var visible = false;
+    eye.addEventListener('click', function() {
+      visible = !visible;
+      val.textContent = visible ? value : '••••••••';
+      val.classList.toggle('masked', !visible);
+    });
+    row.appendChild(eye);
+  }
+
+  var copy = document.createElement('button');
+  copy.className = 'mini'; copy.textContent = '📋';
+  copy.addEventListener('click', function() { copyText(value, !!opts.sensitive); });
+  row.appendChild(copy);
+
+  return row;
+}
+
+function buildCard(e) {
+  var card = document.createElement('div');
+  card.className = 'card';
+
+  var head = document.createElement('div');
+  head.className = 'card-head';
+  var name = document.createElement('div');
+  name.className = 'name'; name.textContent = e.name || '(無題)';
+  head.appendChild(name);
+  var badge = document.createElement('span');
+  badge.className = 'badge' + (e.type === 'creditcard' ? ' cc' : '');
+  badge.textContent = e.category || '未分類';
+  head.appendChild(badge);
+  card.appendChild(head);
+
+  if (e.type === 'creditcard') {
+    var c = e.card || {};
+    if (c.number) card.appendChild(fieldRow('カード番号', c.number, { sensitive: true }));
+    if (c.expiry) card.appendChild(fieldRow('有効期限', c.expiry, {}));
+    if (c.code) card.appendChild(fieldRow('セキュリティ', c.code, { mask: true, sensitive: true }));
+  } else {
+    if (e.account) card.appendChild(fieldRow('アカウント', e.account, {}));
+    if (e.password) card.appendChild(fieldRow('パスワード', e.password, { mask: true, sensitive: true }));
+    (e.subAccounts || []).forEach(function(s) {
+      if (!s.account && !s.password) return;
+      var g = document.createElement('div');
+      g.className = 'sub-group';
+      var title = document.createElement('div');
+      title.className = 'sub-title'; title.textContent = s.label || 'サブアカウント';
+      g.appendChild(title);
+      if (s.account) g.appendChild(fieldRow('アカウント', s.account, {}));
+      if (s.password) g.appendChild(fieldRow('パスワード', s.password, { mask: true, sensitive: true }));
+      card.appendChild(g);
+    });
+  }
+
+  if (e.memo) {
+    var memo = document.createElement('div');
+    memo.className = 'memo'; memo.textContent = '📝 ' + e.memo;
+    card.appendChild(memo);
+  }
+
+  var foot = document.createElement('div');
+  foot.className = 'card-foot';
+  var edit = document.createElement('button');
+  edit.className = 'edit-btn'; edit.textContent = '✎ 編集';
+  edit.addEventListener('click', function() { openEdit(e); });
+  foot.appendChild(edit);
+  card.appendChild(foot);
+
+  return card;
+}
+
+// ============================================================
+//  追加 / 編集
+// ============================================================
+function fillCategorySelect(selected) {
+  var sel = $('f-category');
+  sel.innerHTML = '';
+  App.vault.categories.forEach(function(c) {
+    var o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === selected) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function setEditType(type) {
+  App.editType = type;
+  document.querySelectorAll('.type-toggle button').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.type === type);
+  });
+  $('fields-normal').classList.toggle('hidden', type !== 'normal');
+  $('fields-card').classList.toggle('hidden', type !== 'creditcard');
+}
+
+function renderSubEditors() {
+  var box = $('sub-list');
+  box.innerHTML = '';
+  App.subAccounts.forEach(function(s, idx) {
+    var wrap = document.createElement('div');
+    wrap.className = 'sub-edit';
+
+    var head = document.createElement('div');
+    head.className = 'sub-edit-head';
+    var span = document.createElement('span');
+    span.textContent = 'サブアカウント ' + (idx + 1);
+    var del = document.createElement('button');
+    del.className = 'mini'; del.textContent = '削除';
+    del.addEventListener('click', function() {
+      App.subAccounts.splice(idx, 1);
+      renderSubEditors();
+    });
+    head.appendChild(span); head.appendChild(del);
+    wrap.appendChild(head);
+
+    wrap.appendChild(makeInput('ラベル（例：取引パスワード）', s.label, function(v) { s.label = v; }));
+    wrap.appendChild(makeInput('アカウント / ID', s.account, function(v) { s.account = v; }));
+    wrap.appendChild(makeInput('パスワード', s.password, function(v) { s.password = v; }));
+
+    box.appendChild(wrap);
+  });
+}
+function makeInput(placeholder, value, onInput) {
+  var g = document.createElement('div');
+  g.className = 'form-group';
+  g.style.marginBottom = '8px';
+  var inp = document.createElement('input');
+  inp.type = 'text'; inp.placeholder = placeholder; inp.value = value || '';
+  inp.addEventListener('input', function() { onInput(inp.value); });
+  g.appendChild(inp);
+  return g;
+}
+
+function openEdit(entry) {
+  var isNew = !entry;
+  entry = entry || {};
+  App.editingId = entry.id || null;
+  $('edit-title').textContent = isNew ? '追加' : '編集';
+  $('delete-entry').classList.toggle('hidden', isNew);
+
+  setEditType(entry.type === 'creditcard' ? 'creditcard' : 'normal');
+  fillCategorySelect(entry.category || App.vault.categories[0]);
+  $('f-name').value = entry.name || '';
+
+  // normal
+  $('f-account').value = entry.account || '';
+  $('f-password').value = entry.password || '';
+  App.subAccounts = (entry.subAccounts || []).map(function(s) {
+    return { label: s.label || '', account: s.account || '', password: s.password || '' };
+  });
+  renderSubEditors();
+
+  // card
+  var c = entry.card || {};
+  $('f-cardnum').value = c.number || '';
+  $('f-expiry').value = c.expiry || '';
+  $('f-cardcode').value = c.code || '';
+
+  $('f-memo').value = entry.memo || '';
+
+  showView('edit');
+}
+
+function saveEntry() {
+  var name = $('f-name').value.trim();
+  if (!name) { toast('名称を入力してください', true); return; }
+
+  var entry = {
+    id: App.editingId,
+    category: $('f-category').value,
+    name: name,
+    type: App.editType,
+    memo: $('f-memo').value
+  };
+
+  if (App.editType === 'creditcard') {
+    entry.card = {
+      number: $('f-cardnum').value.trim(),
+      expiry: $('f-expiry').value.trim(),
+      code: $('f-cardcode').value.trim()
+    };
+  } else {
+    entry.account = $('f-account').value;
+    entry.password = $('f-password').value;
+    entry.subAccounts = App.subAccounts.filter(function(s) {
+      return s.label || s.account || s.password;
+    });
+  }
+
+  $('save-entry').disabled = true;
+  call('apiSaveEntry', App.token, entry).then(function(data) {
+    App.vault = data;
+    $('save-entry').disabled = false;
+    toast('保存しました');
+    renderChips();
+    renderList();
+    showView('list');
+  }).catch(function(err) {
+    $('save-entry').disabled = false;
+    handleAuthErr(err);
+  });
+}
+
+function deleteEntry() {
+  if (!App.editingId) return;
+  if (!confirm('この項目を削除しますか？')) return;
+  call('apiDeleteEntry', App.token, App.editingId).then(function(data) {
+    App.vault = data;
+    toast('削除しました');
+    renderChips();
+    renderList();
+    showView('list');
+  }).catch(function(err) { handleAuthErr(err); });
+}
+
+function genPassword() {
+  var sets = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?';
+  var out = '';
+  var arr = new Uint32Array(16);
+  if (window.crypto && window.crypto.getRandomValues) {
+    window.crypto.getRandomValues(arr);
+    for (var i = 0; i < 16; i++) out += sets[arr[i] % sets.length];
+  } else {
+    for (var i = 0; i < 16; i++) out += sets[Math.floor(Math.random() * sets.length)];
+  }
+  $('f-password').value = out;
+  toast('パスワードを生成しました');
+}
+
+// ============================================================
+//  設定
+// ============================================================
+function openSettings() {
+  renderCatEditor();
+  $('old-pin').value = '';
+  $('new-pin').value = '';
+  showView('settings');
+}
+function renderCatEditor() {
+  var box = $('cat-edit-list');
+  box.innerHTML = '';
+  App.vault.categories.forEach(function(c, idx) {
+    var item = document.createElement('div');
+    item.className = 'cat-item';
+    var name = document.createElement('div');
+    name.className = 'cat-name'; name.textContent = c;
+    item.appendChild(name);
+
+    var up = document.createElement('button');
+    up.className = 'mini'; up.textContent = '↑';
+    up.addEventListener('click', function() { moveCat(idx, -1); });
+    var down = document.createElement('button');
+    down.className = 'mini'; down.textContent = '↓';
+    down.addEventListener('click', function() { moveCat(idx, 1); });
+    var del = document.createElement('button');
+    del.className = 'mini'; del.textContent = '🗑';
+    del.addEventListener('click', function() {
+      App.vault.categories.splice(idx, 1);
+      renderCatEditor();
+    });
+    item.appendChild(up); item.appendChild(down); item.appendChild(del);
+    box.appendChild(item);
+  });
+}
+function moveCat(idx, dir) {
+  var arr = App.vault.categories;
+  var ni = idx + dir;
+  if (ni < 0 || ni >= arr.length) return;
+  var t = arr[idx]; arr[idx] = arr[ni]; arr[ni] = t;
+  renderCatEditor();
+}
+function addCat() {
+  var v = $('new-cat').value.trim();
+  if (!v) return;
+  if (App.vault.categories.indexOf(v) >= 0) { toast('既に存在します', true); return; }
+  App.vault.categories.push(v);
+  $('new-cat').value = '';
+  renderCatEditor();
+}
+function saveCats() {
+  call('apiSaveCategories', App.token, App.vault.categories).then(function(data) {
+    App.vault = data;
+    toast('カテゴリーを保存しました');
+    renderChips();
+  }).catch(function(err) { handleAuthErr(err); });
+}
+function changePin() {
+  var oldP = $('old-pin').value.trim();
+  var newP = $('new-pin').value.trim();
+  if (!/^[0-9]{4}$/.test(newP)) { toast('新しいPINは0〜9の数字4桁です', true); return; }
+  call('apiChangePin', App.token, oldP, newP).then(function() {
+    $('old-pin').value = ''; $('new-pin').value = '';
+    toast('PINを変更しました');
+  }).catch(function(err) { handleAuthErr(err); });
+}
+function backup() {
+  $('btn-backup').disabled = true;
+  call('apiBackup', App.token).then(function(res) {
+    $('btn-backup').disabled = false;
+    toast('バックアップ作成: ' + res.name);
+  }).catch(function(err) {
+    $('btn-backup').disabled = false;
+    handleAuthErr(err);
+  });
+}
+
+// ============================================================
+//  イベント登録 / 初期化
+// ============================================================
+function bind() {
+  $('pin-clear').addEventListener('click', function() {
+    if (App.mode === 'setup') { App.setupStage = 1; App.setupFirst = null; }
+    resetPin();
+  });
+
+  $('btn-lock').addEventListener('click', lockApp);
+  $('btn-settings').addEventListener('click', openSettings);
+  $('btn-add').addEventListener('click', function() { openEdit(null); });
+  $('search').addEventListener('input', function() {
+    App.search = this.value.trim();
+    renderList();
+  });
+
+  $('edit-back').addEventListener('click', function() { showView('list'); });
+  document.querySelectorAll('.type-toggle button').forEach(function(b) {
+    b.addEventListener('click', function() { setEditType(b.dataset.type); });
+  });
+  $('add-sub').addEventListener('click', function() {
+    App.subAccounts.push({ label: '', account: '', password: '' });
+    renderSubEditors();
+  });
+  $('f-gen').addEventListener('click', genPassword);
+  $('save-entry').addEventListener('click', saveEntry);
+  $('delete-entry').addEventListener('click', deleteEntry);
+
+  $('settings-back').addEventListener('click', function() { showView('list'); });
+  $('add-cat').addEventListener('click', addCat);
+  $('save-cats').addEventListener('click', saveCats);
+  $('change-pin').addEventListener('click', changePin);
+  $('btn-backup').addEventListener('click', backup);
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+  bind();
+  initLogin();
+});
+</script>
